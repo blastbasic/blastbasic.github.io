@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Matts Balls</title>
+<style type="text/css">
+body{
+	height: 100%;
+	overflow: hidden; /* keeps scrollbar off IE */
+	font-family: arial,sans-serif;
+	font-size: 13px;
+	color: #000;
+	background-color: #EEE;
+	border: 0 none white;
+	padding: 0;
+	margin: 0;
+}
+canvas{
+	border: 0;
+	padding: 0;
+    margin: auto;
+    display: block;
+	outline: none;
+}
+textarea{
+    background-color: #DDD;
+	border: 0;
+	padding: 0;
+	margin: 0;
+	outline: none;
+    width: 100%;
+}
+div.splitter{
+    background-color: #FFF;
+	border: 0;
+	padding: 0;
+	margin: 0;
+	height: 8px;
+}
+</style>
+<script>
+
+var CANVAS_RESIZE_MODE=1;	//0=locked, 1=stretch, 2=resize
+
+var CANVAS_WIDTH=800;
+var CANVAS_HEIGHT=600;
+</script>
+
+</head>
+<body>
+	<div><canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" width=800 height=600 tabindex=1></canvas></div>
+	<div id="Splitter" class=splitter></div>
+	<div><textarea class="emscripten" id="status"></textarea></div>
+	<script language="javascript" src="webloader.js?bouncey=1">Javascript not supported!</script>
+</body>
+</html>

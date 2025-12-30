@@ -1,0 +1,1070 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Legacy of HYDON - Browser Game</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background-color: #1a1a2e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+        }
+        .ad-container {
+            width: 100%;
+            max-width: 800px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        #gameContainer {
+            position: relative;
+            box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
+        }
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 24px;
+            text-align: center;
+            background: rgba(0,0,0,0.8);
+            padding: 20px 40px;
+            border-radius: 8px;
+        }
+        #controls {
+            position: absolute;
+            bottom: -40px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            color: #888;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="ad-container">
+        <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2783710643954601"
+     crossorigin="anonymous"></script>        
+        <ins class="adsbygoogle"
+            style="display:block"
+            data-ad-client="ca-pub-2783710643954601"
+            data-ad-slot="4245531950"
+            data-ad-format="auto"
+            data-full-width-responsive="true"></ins>
+        <script>
+            (adsbygoogle = window.adsbygoogle || []).push({});
+        </script>
+    </div>
+
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div id="loading">Loading...<br><small>Loading game assets</small></div>
+        <div id="controls">W - Move Forward | A/D - Turn | S - Change Stance</div>
+    </div>
+    <script>
+        // ============================================================================
+        // LEGACY OF HYDON - HTML5/Canvas 2D Port
+        // Originally by Niklas Jansson (LudumDare 48hr entry, Yule 2009)
+        // Ported from Blitz3D to HTML5/Canvas 2D
+        // ============================================================================
+
+        // Constants matching the original Blitz3D code
+        const X_MAP_HANDLE = 400;
+        const Y_MAP_HANDLE = -220;
+
+        const MAP_WIDTH_TILES = 128;
+        const MAP_HEIGHT_TILES = 128;
+
+        const TILE_W = 80;
+        const TILE_H = 40;
+
+        const GFX_ROWS = 15;
+        const GFX_COLS = 8;
+        const GFX_PLAYER = 96;
+
+        // Game state
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        let gameState = {
+            titleShown: false,
+            gameStarted: false,
+            gameOver: false,
+            victory: false,
+            lastFrameTime: 0,
+            frameDelay: 12,
+            titleTimer: 0
+        };
+
+        // Map data
+        let mapData = {
+            ground: new Uint8Array(MAP_WIDTH_TILES * MAP_HEIGHT_TILES),
+            obstacle: new Uint8Array(MAP_WIDTH_TILES * MAP_HEIGHT_TILES),
+            action: new Uint8Array(MAP_WIDTH_TILES * MAP_HEIGHT_TILES),
+            selectedTile: 0,
+            xScroll: 0,
+            yScroll: 0,
+            gfx: null,
+            shade: null,
+            selectbox: null
+        };
+
+        // Player data
+        let player = {
+            angle: 0,
+            stance: 0,
+            xPos: 0,
+            yPos: 0,
+            health: 10,
+            maxHealth: 10,
+            att: 10,
+            def: 10,
+            xp: 0,
+            treasure: new Array(10).fill(0),
+            maxTreasure: 0,
+            treasureCount: 0,
+            hStatus: -1,
+            xEnemyStatus: -1,
+            yEnemyStatus: -1,
+            hEnemyStatus: -1,
+            tick4: 0
+        };
+
+        // Input state
+        let keys = {};
+        let keyStates = {};
+
+        // Assets
+        let titleImg = null;
+        let victoryImg = null;
+
+        function loadMaskedImage(src, callback) {
+            const img = new Image();
+            img.onload = function() {
+                // Create a canvas to process the image
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = img.width;
+                tempCanvas.height = img.height;
+                const tempCtx = tempCanvas.getContext('2d');
+                
+                // Draw the original image
+                tempCtx.drawImage(img, 0, 0);
+                
+                // Get image data for pixel manipulation
+                const imageData = tempCtx.getImageData(0, 0, img.width, img.height);
+                const data = imageData.data;
+                
+                // Put the masked image data back
+                tempCtx.putImageData(imageData, 0, 0);
+                
+                // Create a new Image from the processed canvas
+                const maskedImg = new Image();
+                maskedImg.onload = function() {
+                    callback(maskedImg);
+                };
+                maskedImg.onerror = function() {
+                    // Fallback to original if processing fails
+                    callback(img);
+                };
+                maskedImg.src = tempCanvas.toDataURL();
+            };
+            img.onerror = function() {
+                console.error('Failed to load image:', src);
+                callback(null);
+            };
+            img.src = src;
+        }
+
+        /**
+         * Load an animated image strip (like Blitz3D's LoadAnimImage)
+         * This loads a sprite sheet and prepares individual frames
+         */
+        function loadAnimImageStrip(src, frameWidth, frameHeight, callback) {
+            const img = new Image();
+            img.onload = function() {
+                // Calculate total frames
+                const totalFrames = (img.width / frameWidth) * (img.height / frameHeight);
+                
+                // Create a canvas to process the image with masking
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = img.width;
+                tempCanvas.height = img.height;
+                const tempCtx = tempCanvas.getContext('2d');
+                
+                // Draw the original image
+                tempCtx.drawImage(img, 0, 0);
+                
+                // Get image data for pixel manipulation
+                const imageData = tempCtx.getImageData(0, 0, img.width, img.height);
+                const data = imageData.data;
+                              
+                // Put the masked image data back
+                tempCtx.putImageData(imageData, 0, 0);
+                
+                // Create individual frame canvases
+                const frames = [];
+                const cols = Math.floor(img.width / frameWidth);
+                const rows = Math.floor(img.height / frameHeight);
+                
+                for (let row = 0; row < rows; row++) {
+                    for (let col = 0; col < cols; col++) {
+                        const frameCanvas = document.createElement('canvas');
+                        frameCanvas.width = frameWidth;
+                        frameCanvas.height = frameHeight;
+                        const frameCtx = frameCanvas.getContext('2d');
+                        frameCtx.drawImage(
+                            tempCanvas,
+                            col * frameWidth, row * frameHeight,
+                            frameWidth, frameHeight,
+                            0, 0,
+                            frameWidth, frameHeight
+                        );
+                        frames.push(frameCanvas);
+                    }
+                }
+                
+                callback(frames);
+            };
+            img.onerror = function() {
+                console.error('Failed to load animated image:', src);
+                callback(null);
+            };
+            img.src = src;
+        }
+
+        /**
+         * Load a simple image with white masking
+         */
+        function loadWhiteMaskedImage(src, callback) {
+            const img = new Image();
+            img.onload = function() {
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = img.width;
+                tempCanvas.height = img.height;
+                const tempCtx = tempCanvas.getContext('2d');
+                
+                tempCtx.drawImage(img, 0, 0);
+                
+                const imageData = tempCtx.getImageData(0, 0, img.width, img.height);
+                const data = imageData.data;
+                               
+                tempCtx.putImageData(imageData, 0, 0);
+                
+                const maskedImg = new Image();
+                maskedImg.onload = function() {
+                    callback(maskedImg);
+                };
+                maskedImg.onerror = function() {
+                    callback(img);
+                };
+                maskedImg.src = tempCanvas.toDataURL();
+            };
+            img.onerror = function() {
+                console.error('Failed to load image:', src);
+                callback(null);
+            };
+            img.src = src;
+        }
+
+        // ============================================================================
+        // MAP FUNCTIONS
+        // ============================================================================
+
+        function readGround(x, y) {
+            if (x < 0 || x >= MAP_WIDTH_TILES || y < 0 || y >= MAP_HEIGHT_TILES) {
+                return 255;
+            }
+            return mapData.ground[y * MAP_WIDTH_TILES + x];
+        }
+
+        function writeGround(x, y, value) {
+            if (x < 0 || x >= MAP_WIDTH_TILES || y < 0 || y >= MAP_HEIGHT_TILES) {
+                return;
+            }
+            mapData.ground[y * MAP_WIDTH_TILES + x] = value;
+        }
+
+        function readObstacle(x, y) {
+            if (x < 0 || x >= MAP_WIDTH_TILES || y < 0 || y >= MAP_HEIGHT_TILES) {
+                return 0;
+            }
+            return mapData.obstacle[y * MAP_WIDTH_TILES + x];
+        }
+
+        function writeObstacle(x, y, value) {
+            if (x < 0 || x >= MAP_WIDTH_TILES || y < 0 || y >= MAP_HEIGHT_TILES) {
+                return;
+            }
+            mapData.obstacle[y * MAP_WIDTH_TILES + x] = value;
+        }
+
+        function clearObstacle(x, y) {
+            mapData.obstacle[y * MAP_WIDTH_TILES + x] = 0;
+        }
+
+        function readAction(x, y) {
+            if (x < 0 || x >= MAP_WIDTH_TILES || y < 0 || y >= MAP_HEIGHT_TILES) {
+                return 0;
+            }
+            return mapData.action[y * MAP_WIDTH_TILES + x];
+        }
+
+        function writeAction(x, y, value) {
+            if (x < 0 || x >= MAP_WIDTH_TILES || y < 0 || y >= MAP_HEIGHT_TILES) {
+                return;
+            }
+            mapData.action[y * MAP_WIDTH_TILES + x] = value;
+        }
+
+        function swapObstacle(x, y, xo, yo) {
+            // Copy from current to new position
+            writeObstacle(x + xo, y + yo, readObstacle(x, y));
+            // Clear old position
+            writeObstacle(x, y, 0);
+
+            // Also copy action
+            writeAction(x + xo, y + yo, readAction(x, y));
+            writeAction(x, y, 0);
+        }
+
+        // ============================================================================
+        // DRAWING FUNCTIONS
+        // ============================================================================
+
+        /**
+         * Draw a single tile from the graphics strip at the specified position
+         * This replicates Blitz3D's DrawImage functionality with proper centering
+         */
+        function drawTile(x, y, frameIndex) {
+            if (!mapData.gfx || frameIndex < 0 || frameIndex >= mapData.gfx.length) {
+                return;
+            }
+            
+            const frame = mapData.gfx[frameIndex];
+            // HandleImage is set to center horizontally (TILE_W / 2) and top (0)
+            // So we offset by half the tile width to center it
+            //ctx.drawImage(frame, x - TILE_W / 2, y);
+            ctx.drawImage(frame, Math.floor(x - TILE_W / 2), Math.floor(y), TILE_W + 6, (TILE_H * 3) + 6);
+        }
+
+        /**
+         * Draw a tile with shading
+         */
+        function drawObstacleTile(x, y, frameIndex) {
+            if (frameIndex < GFX_COLS * 2) {
+                return; // Don't draw if tile is ground
+            }
+            
+            // Draw shade first
+            if (mapData.shade) {
+                ctx.drawImage(mapData.shade, x - mapData.shade.width / 2, y);
+            }
+            
+            // Then draw the obstacle
+            drawTile(x, y, frameIndex);
+        }
+
+        /**
+         * Draw the entire visible map
+         */
+        function drawMap() {
+            for (let y = -5; y <= 28; y++) {
+                for (let x = -5; x <= 28; x++) {
+                    // Convert to isometric coordinates
+                    const xiso = (x * 40) - (y * 40) + X_MAP_HANDLE;
+                    const yiso = (y * 20) + (x * 20) + Y_MAP_HANDLE;
+
+                    // Check if tile is visible on screen
+                    if (xiso > -80 && yiso > -160 && xiso < 880 && yiso < 680) {
+                        const xo = x + mapData.xScroll;
+                        const yo = y + mapData.yScroll;
+                        
+                        const groundIndex = readGround(xo, yo);
+                        if (groundIndex < 255) {
+                            // Draw ground first
+                            drawTile(xiso, yiso, groundIndex);
+                            // Then draw obstacle on top
+                            const obstacleIndex = readObstacle(xo, yo);
+                            drawObstacleTile(xiso, yiso, obstacleIndex);
+                        }
+                    }
+                }
+            }
+        }
+
+        /**
+         * Draw the narrow HUD panel
+         */
+        function drawHUD() {
+            // HUD panel background
+            ctx.fillStyle = '#b4b4b4';
+            ctx.fillRect(660, 0, 140, 600);
+            
+            // Left border
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(660, 0);
+            ctx.lineTo(660, 599);
+            ctx.stroke();
+        }
+
+        /**
+         * Draw player statistics
+         */
+        function drawStats() {
+            ctx.font = '16px "Courier New", monospace';
+            
+            // Shadow
+            ctx.fillStyle = '#000000';
+            ctx.fillText('HP  ' + player.health + '/' + player.maxHealth, 679, 499);
+            ctx.fillText('Str ' + player.att, 679, 519);
+            ctx.fillText('Def ' + player.def, 679, 539);
+            
+            // Main text
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText('HP  ' + player.health + '/' + player.maxHealth, 678, 498);
+            ctx.fillText('Str ' + player.att, 678, 518);
+            ctx.fillText('Def ' + player.def, 678, 538);
+        }
+
+        /**
+         * Draw treasure list
+         */
+        function drawTreasureList() {
+            ctx.font = '16px "Courier New", monospace';
+            
+            // Loot count
+            ctx.fillStyle = '#000000';
+            ctx.fillText('Loot ' + player.treasureCount + '/' + player.maxTreasure, 679, 19);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText('Loot ' + player.treasureCount + '/' + player.maxTreasure, 678, 18);
+            
+            // Draw individual treasures
+            let slot = 0;
+            for (let i = 0; i < 8; i++) {
+                if (player.treasure[i] > 0) {
+                    const drawY = 70 + (slot * 45);
+                    
+                    // Draw treasure icon
+                    drawTile(725, drawY - 98, 13 * GFX_COLS + i);
+                    
+                    // Draw quantity
+                    ctx.fillStyle = '#000000';
+                    ctx.fillText('x ' + player.treasure[i], 761, drawY - 7 + 1);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillText('x ' + player.treasure[i], 760, drawY - 7);
+                    
+                    slot++;
+                }
+            }
+        }
+
+        /**
+         * Draw status effects (damage/block indicators)
+         */
+        function drawStatus() {
+            // Player status
+            if (player.hStatus >= 0) {
+                const xiso = ((player.xPos - mapData.xScroll) * 40) - ((player.yPos - mapData.yScroll) * 40) + X_MAP_HANDLE;
+                const yiso = ((player.yPos - mapData.yScroll) * 20) + ((player.xPos - mapData.xScroll) * 20) + Y_MAP_HANDLE;
+                drawTile(xiso, yiso, player.hStatus);
+            }
+            
+            // Enemy status
+            if (player.hEnemyStatus >= 0) {
+                const xiso = ((player.xEnemyStatus - mapData.xScroll) * 40) - ((player.yEnemyStatus - mapData.yScroll) * 40) + X_MAP_HANDLE;
+                const yiso = ((player.yEnemyStatus - mapData.yScroll) * 20) + ((player.xEnemyStatus - mapData.xScroll) * 20) + Y_MAP_HANDLE;
+                drawTile(xiso, yiso, player.hEnemyStatus);
+            }
+        }
+
+        // ============================================================================
+        // PLAYER FUNCTIONS
+        // ============================================================================
+
+        function clearStatus() {
+            player.hEnemyStatus = -1;
+            player.hStatus = -1;
+        }
+
+        function writePlayer() {
+            const tileIndex = GFX_PLAYER + player.angle + player.stance * 4;
+            writeObstacle(player.xPos, player.yPos, tileIndex);
+        }
+
+        function goForward() {
+            let xo = 0, yo = 0;
+            
+            switch (player.angle) {
+                case 0: yo = 1; break;
+                case 1: xo = -1; break;
+                case 2: yo = -1; break;
+                case 3: xo = 1; break;
+            }
+            
+            const bumpinto = readObstacle(player.xPos + xo, player.yPos + yo);
+            
+            // Move player if space is empty
+            if (bumpinto === 0) {
+                swapObstacle(player.xPos, player.yPos, xo, yo);
+                player.xPos = player.xPos + xo;
+                player.yPos = player.yPos + yo;
+            } else {
+                // Check for stuff to attack or pick up
+                const row = Math.floor(bumpinto / GFX_COLS);
+                const enemysta = Math.floor((bumpinto - (row * GFX_COLS)) / 4);
+                
+                switch (row) {
+                    case 13: // Collect Treasure
+                        player.treasureCount++;
+                        player.treasure[bumpinto - row * GFX_COLS]++;
+                        clearObstacle(player.xPos + xo, player.yPos + yo);
+                        player.health = player.maxHealth; // Regen
+                        
+                        if (player.treasureCount === player.maxTreasure) {
+                            showVictory();
+                        }
+                        break;
+                    case 6: combat(xo, yo, 10.0, enemysta); break; // Slime
+                    case 7: combat(xo, yo, 90.0, enemysta); break; // Knight
+                    case 8: combat(xo, yo, 40.0, enemysta); break; // Runner
+                    case 9: combat(xo, yo, 30.0, enemysta); break; // Wyrm
+                    case 10: combat(xo, yo, 50.0, enemysta); break; // Roper
+                    case 11: combat(xo, yo, 70.0, enemysta); break; // Poop man
+                }
+            }
+        }
+
+        function combat(xo, yo, enemyDef, enemysta) {
+            let playerAtt = player.att;
+            
+            // Def mode = double def, half att
+            if (player.stance === 1) {
+                playerAtt = playerAtt * 0.3;
+            }
+            if (enemysta === 1) {
+                enemyDef = enemyDef * 2.8;
+            }
+            
+            if (Math.random() < (playerAtt / (enemyDef + playerAtt))) {
+                // Hit - enemy dies
+                clearObstacle(player.xPos + xo, player.yPos + yo);
+                
+                player.hEnemyStatus = 14 * GFX_COLS + Math.floor(Math.random() * 4);
+                player.xEnemyStatus = player.xPos + xo;
+                player.yEnemyStatus = player.yPos + yo;
+                
+                // Level up
+                player.att += Math.floor(Math.random() * 2);
+                player.def += Math.floor(Math.random() * 2);
+                player.maxHealth += Math.floor(Math.random() * 2);
+            } else {
+                // Block
+                player.hEnemyStatus = 14 * GFX_COLS + 4 + Math.floor(Math.random() * 4);
+                player.xEnemyStatus = player.xPos + xo;
+                player.yEnemyStatus = player.yPos + yo;
+            }
+        }
+
+        function defend(enemyAtt, enemysta) {
+            let playerDef = player.def;
+            
+            // Def mode = double def, half att
+            if (player.stance === 1) {
+                playerDef = playerDef * 2.8;
+            }
+            if (enemysta === 1) {
+                enemyAtt = enemyAtt * 0.3;
+            }
+            
+            if (Math.random() > (playerDef / (enemyAtt + playerDef))) {
+                // Take damage
+                player.hStatus = 14 * GFX_COLS + Math.floor(Math.random() * 4);
+                player.health -= (Math.floor(Math.random() * 3) + 1);
+                
+                if (player.health <= 0) {
+                    showGameOver();
+                }
+            } else {
+                // Block
+                player.hStatus = 14 * GFX_COLS + 4 + Math.floor(Math.random() * 4);
+            }
+        }
+
+        function turnLeft() {
+            player.angle--;
+            if (player.angle < 0) player.angle = 3;
+            writePlayer();
+        }
+
+        function turnRight() {
+            player.angle++;
+            if (player.angle > 3) player.angle = 0;
+            writePlayer();
+        }
+
+        function changeStance() {
+            player.stance = 1 - player.stance;
+            writePlayer();
+        }
+
+        function tick() {
+            player.tick4++;
+            if (player.tick4 >= 4) player.tick4 = 0;
+        }
+
+        function focusPlayer() {
+            mapData.xScroll = player.xPos - 12;
+            mapData.yScroll = player.yPos - 12;
+        }
+
+        function defaultState() {
+            player.att = 10;
+            player.def = 10;
+            player.maxHealth = 10;
+            player.health = 10;
+            clearStatus();
+        }
+
+        // ============================================================================
+        // AI FUNCTIONS
+        // ============================================================================
+
+        function aiMove() {
+            // Reset action points around player
+            for (let y = -10; y <= 10; y++) {
+                for (let x = -10; x <= 10; x++) {
+                    writeAction(x + player.xPos, y + player.yPos, 1);
+                }
+            }
+            
+            // Process enemies around player
+            for (let y = -10; y <= 10; y++) {
+                for (let x = -10; x <= 10; x++) {
+                    if (readAction(x + player.xPos, y + player.yPos) === 1) {
+                        writeAction(x + player.xPos, y + player.yPos, 0);
+                        
+                        const enemy = readObstacle(x + player.xPos, y + player.yPos);
+                        if (enemy >= 6 * GFX_COLS && enemy < 12 * GFX_COLS) {
+                            let ang = enemy % GFX_COLS;
+                            let sta = 0;
+                            if (ang >= 4) sta = 1;
+                            ang = ang % 4;
+                            
+                            const charge = 
+                                (x + player.xPos === player.xPos && y + player.yPos < player.yPos && ang === 0) ||
+                                (x + player.xPos === player.xPos && y + player.yPos > player.yPos && ang === 2) ||
+                                (y + player.yPos === player.yPos && x + player.xPos < player.xPos && ang === 3) ||
+                                (y + player.yPos === player.yPos && x + player.xPos > player.xPos && ang === 1);
+                            
+                            const row = Math.floor(enemy / GFX_COLS);
+                            
+                            if (charge) {
+                                if (Math.floor(Math.random() * 6) > 0) {
+                                    aiGoForward(x + player.xPos, y + player.yPos, ang, row);
+                                }
+                            } else {
+                                // Random movement based on enemy type
+                                switch (row) {
+                                    case 6: // SLIME AI
+                                        if (player.tick4 === 0) {
+                                            const r = Math.floor(Math.random() * 5);
+                                            if (r === 0) aiTurnLeft(x + player.xPos, y + player.yPos, ang, sta, 6);
+                                            else if (r === 1) aiTurnRight(x + player.xPos, y + player.yPos, ang, sta, 6);
+                                            else aiGoForward(x + player.xPos, y + player.yPos, ang, 6);
+                                        }
+                                        break;
+                                    case 7: // KNIGHT AI
+                                        if (player.tick4 < 2) {
+                                            const r = Math.floor(Math.random() * 6);
+                                            if (r === 0) aiTurnLeft(x + player.xPos, y + player.yPos, ang, sta, 7);
+                                            else if (r === 1) aiTurnRight(x + player.xPos, y + player.yPos, ang, sta, 7);
+                                            else if (r === 2) aiChangeStance(x + player.xPos, y + player.yPos, ang, sta, 7);
+                                            else if (r === 3) aiChangeStance(x + player.xPos, y + player.yPos, ang, 0, 7);
+                                            else aiGoForward(x + player.xPos, y + player.yPos, ang, 7);
+                                        }
+                                        break;
+                                    case 8: // RUNNER AI
+                                        const r8 = Math.floor(Math.random() * 9);
+                                        if (r8 === 0) aiTurnLeft(x + player.xPos, y + player.yPos, ang, sta, 8);
+                                        else if (r8 === 1) aiTurnRight(x + player.xPos, y + player.yPos, ang, sta, 8);
+                                        else if (r8 >= 3) aiGoForward(x + player.xPos, y + player.yPos, ang, 8);
+                                        break;
+                                    case 9: // WYRM AI
+                                        if (player.tick4 < 3) {
+                                            const r9 = Math.floor(Math.random() * 6);
+                                            if (r9 === 0) aiTurnLeft(x + player.xPos, y + player.yPos, ang, sta, 9);
+                                            else if (r9 === 1) aiTurnRight(x + player.xPos, y + player.yPos, ang, sta, 9);
+                                            else if (r9 === 2) aiChangeStance(x + player.xPos, y + player.yPos, ang, sta, 9);
+                                            else if (r9 === 3) aiChangeStance(x + player.xPos, y + player.yPos, ang, 1, 9);
+                                            else aiGoForward(x + player.xPos, y + player.yPos, ang, 9);
+                                        }
+                                        break;
+                                    case 10: // ROPER AI
+                                        if (player.tick4 < 2) {
+                                            const r10 = Math.floor(Math.random() * 7);
+                                            if (r10 === 0) aiTurnLeft(x + player.xPos, y + player.yPos, ang, sta, 10);
+                                            else if (r10 === 1) aiTurnRight(x + player.xPos, y + player.yPos, ang, sta, 10);
+                                            else if (r10 >= 3) aiGoForward(x + player.xPos, y + player.yPos, ang, 10);
+                                        }
+                                        break;
+                                    case 11: // MEAT MAN AI
+                                        if (player.tick4 < 2) {
+                                            const r11 = Math.floor(Math.random() * 5);
+                                            if (r11 === 0) aiTurnLeft(x + player.xPos, y + player.yPos, ang, sta, 11);
+                                            else if (r11 === 1) aiTurnRight(x + player.xPos, y + player.yPos, ang, sta, 11);
+                                            else if (r11 >= 3) aiGoForward(x + player.xPos, y + player.yPos, ang, 11);
+                                        }
+                                        break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        function aiChangeStance(x, y, ang, sta, what) {
+            sta = 1 - sta;
+            writeObstacle(x, y, what * GFX_COLS + ang + sta * 4);
+        }
+
+        function aiTurnLeft(x, y, ang, sta, what) {
+            ang--;
+            if (ang < 0) ang = 3;
+            writeObstacle(x, y, what * GFX_COLS + ang + sta * 4);
+        }
+
+        function aiTurnRight(x, y, ang, sta, what) {
+            ang++;
+            if (ang > 3) ang = 0;
+            writeObstacle(x, y, what * GFX_COLS + ang + sta * 4);
+        }
+
+        function aiGoForward(x, y, ang, what) {
+            let xo = 0, yo = 0;
+            
+            switch (ang) {
+                case 0: yo = 1; break;
+                case 1: xo = -1; break;
+                case 2: yo = -1; break;
+                case 3: xo = 1; break;
+            }
+            
+            const bumpinto = readObstacle(x + xo, y + yo);
+            const enemysta = Math.floor((readObstacle(x, y) - (what * GFX_COLS)) / 4);
+            
+            // Move
+            if (bumpinto === 0) {
+                swapObstacle(x, y, xo, yo);
+            } else {
+                const row = Math.floor(bumpinto / GFX_COLS);
+                if (row === 12) { // Attack Player
+                    defend(15.0, enemysta);
+                }
+            }
+        }
+
+        // ============================================================================
+        // INPUT FUNCTIONS
+        // ============================================================================
+
+        function handleInput() {
+            let actionTaken = false;
+            
+            if (keys['w'] && !keyStates['w']) {
+                clearStatus();
+                goForward();
+                aiMove();
+                tick();
+                actionTaken = true;
+                keyStates['w'] = true;
+            }
+            if (!keys['w']) keyStates['w'] = false;
+            
+            if (keys['a'] && !keyStates['a']) {
+                clearStatus();
+                turnLeft();
+                aiMove();
+                tick();
+                actionTaken = true;
+                keyStates['a'] = true;
+            }
+            if (!keys['a']) keyStates['a'] = false;
+            
+            if (keys['d'] && !keyStates['d']) {
+                clearStatus();
+                turnRight();
+                aiMove();
+                tick();
+                actionTaken = true;
+                keyStates['d'] = true;
+            }
+            if (!keys['d']) keyStates['d'] = false;
+            
+            if (keys['s'] && !keyStates['s']) {
+                clearStatus();
+                changeStance();
+                aiMove();
+                tick();
+                actionTaken = true;
+                keyStates['s'] = true;
+            }
+            if (!keys['s']) keyStates['s'] = false;
+            
+            if (actionTaken) {
+                focusPlayer();
+            }
+        }
+
+        // ============================================================================
+        // MAP LOADING
+        // ============================================================================
+
+        async function loadMapData() {
+            try {
+                const response = await fetch('map.dat');
+                if (!response.ok) throw new Error('Failed to load map.dat');
+                
+                const buffer = await response.arrayBuffer();
+                const data = new Uint8Array(buffer);
+                
+                let offset = 0;
+                
+                // Load Ground
+                for (let y = 0; y < MAP_HEIGHT_TILES; y++) {
+                    for (let x = 0; x < MAP_WIDTH_TILES; x++) {
+                        if (offset < data.length) {
+                            writeGround(x, y, data[offset++]);
+                        }
+                    }
+                }
+                
+                // Load Obstacles
+                for (let y = 0; y < MAP_HEIGHT_TILES; y++) {
+                    for (let x = 0; x < MAP_WIDTH_TILES; x++) {
+                        if (offset < data.length) {
+                            const b = data[offset++];
+                            
+                            const row = Math.floor(b / GFX_COLS);
+                            if (row === 12) { // Player position
+                                player.xPos = x;
+                                player.yPos = y;
+                                writePlayer();
+                                focusPlayer();
+                            } else if (row === 13) {
+                                player.maxTreasure++;
+                            }
+                            
+                            writeObstacle(x, y, b);
+                        }
+                    }
+                }
+                
+                return true;
+            } catch (error) {
+                console.error('Error loading map:', error);
+                return false;
+            }
+        }
+
+        // ============================================================================
+        // GAME LOOP
+        // ============================================================================
+
+        function gameLoop(timestamp) {
+            if (!gameState.gameStarted) {
+                // Still in title or loading state
+                if (gameState.titleShown && timestamp - gameState.titleTimer > 2000) {
+                    // Title timer finished, start game
+                    document.getElementById('loading').style.display = 'none';
+                    gameState.gameStarted = true;
+                }
+            }
+            
+            if (gameState.gameStarted && !gameState.gameOver && !gameState.victory) {
+                // Calculate frame timing
+                const elapsed = timestamp - gameState.lastFrameTime;
+                
+                if (elapsed >= gameState.frameDelay) {
+                    gameState.lastFrameTime = timestamp;
+                    
+                    // Handle input
+                    handleInput();
+                    
+                    // Clear canvas
+                    ctx.fillStyle = '#000000';
+                    ctx.fillRect(0, 0, 800, 600);
+                    
+                    // Draw everything
+                    drawMap();
+                    drawStatus();
+                    drawHUD();
+                    drawTreasureList();
+                    drawStats();
+                }
+            }
+
+            else if (gameState.gameOver) {
+                showGameOver(); 
+            } else if (gameState.victory) {
+                showVictory();
+            }            
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        // ============================================================================
+        // SCREEN FUNCTIONS
+        // ============================================================================
+
+        function showGameOver() {
+            gameState.gameOver = true;
+
+            if (gameoverImg) {
+                ctx.drawImage(gameoverImg, 0, 0);
+            } else {                      
+                ctx.fillStyle = '#000000';
+                ctx.fillRect(0, 0, 800, 600);
+                ctx.fillStyle = '#ff0000';
+                ctx.font = '48px "Courier New", monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('GAME OVER', 400, 280);
+                ctx.font = '24px "Courier New", monospace';
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText('Refresh to play again', 400, 340);
+            }
+        }
+
+        function showVictory() {
+            gameState.victory = true;
+            
+            if (victoryImg) {
+                ctx.drawImage(victoryImg, 0, 0);
+            } else {
+                ctx.fillStyle = '#000000';
+                ctx.fillRect(0, 0, 800, 600);
+                ctx.fillStyle = '#00ff00';
+                ctx.font = '48px "Courier New", monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('VICTORY!', 400, 280);
+                ctx.font = '24px "Courier New", monospace';
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText('You found all the treasure!', 400, 340);
+                ctx.fillText('Refresh to play again', 400, 380);
+            }
+        }
+
+        // ============================================================================
+        // INITIALIZATION
+        // ============================================================================
+
+        async function initGame() {
+
+            ctx.imageSmoothingEnabled = false; 
+            
+            // Load assets in parallel            
+            await Promise.all([
+                new Promise(resolve => {
+                    loadAnimImageStrip('ld_iso_gfx_wip4_small.png', TILE_W, TILE_H * 3, (frames) => {
+                        mapData.gfx = frames;
+                        resolve();
+                    });
+                }),
+                new Promise(resolve => {
+                    loadWhiteMaskedImage('shade3.png', (img) => {
+                        mapData.shade = img;
+                        resolve();
+                    });
+                }),
+                new Promise(resolve => {
+                    loadMaskedImage('logo_splash2.bmp', (img) => {
+                        titleImg = img;
+                        resolve();
+                    });
+                }),
+                new Promise(resolve => {
+                    loadMaskedImage('victory.bmp', (img) => {
+                        victoryImg = img;
+                        resolve();
+                    });
+                }),
+                new Promise(resolve => {
+                    loadMaskedImage('gameover.bmp', (img) => {
+                        gameoverImg = img;
+                        resolve();
+                    });
+                })
+            ]);
+            
+            // Load map data
+            const mapLoaded = await loadMapData();
+            if (!mapLoaded) {
+                console.error('Failed to load map data');
+                return;
+            }
+            
+            // Initialize player
+            defaultState();
+            
+            // Hide loading, show title
+            document.getElementById('loading').style.display = 'none';
+            
+            // Draw title
+            if (titleImg) {
+                ctx.drawImage(titleImg, 0, 0);
+            } else {
+                ctx.fillStyle = '#000000';
+                ctx.fillRect(0, 0, 800, 600);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '36px "Courier New", monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('LEGACY OF HYDON', 400, 280);
+            }
+            
+            gameState.titleShown = true;
+            gameState.titleTimer = performance.now();
+            
+            // Start game loop
+            requestAnimationFrame(gameLoop);
+        }
+
+        // ============================================================================
+        // EVENT LISTENERS
+        // ============================================================================
+
+        document.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+            // Prevent scrolling with game keys
+            if (['w', 'a', 's', 'd'].includes(e.key.toLowerCase())) {
+                e.preventDefault();
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+
+        // Start the game when page loads
+        window.onload = initGame;
+    </script>
+</body>
+</html>
